@@ -1,7 +1,7 @@
 import bpy
 import math
 
-def create_cameras_on_sphere(target_object, radius=1.0, num_cameras_longitude=20, num_cameras_latitude=5):
+def create_cameras_on_sphere(target_object, radius=1.0, num_cameras_longitude=20, num_cameras_latitude=1):
     """
     Creates cameras on a sphere around a target object.
 

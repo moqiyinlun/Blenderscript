@@ -209,22 +209,20 @@ class BlenderNeRF_Operator():
         cameras_in_scene = [obj for obj in scene.objects if obj.type == 'CAMERA'] # 获取场景中的所有相机
 
         all_camera_data = {}
-
+        all_camera_data["frames"] = []
         for cam in cameras_in_scene:
+            temp_frame = {}
             intrinsics = self.get_camera_intrinsics(scene, cam)
-            extrinsics = self.get_camera_extrinsics(scene, cam) # 这里默认mode为'TRAIN'和method为'SOF'
-            all_camera_data[cam.name] = {
-                'intrinsics': intrinsics,
-                'extrinsics': extrinsics
-            }
+            extrinsics = self.get_camera_extrinsics(scene, cam) 
+            for key in intrinsics.keys():
+                temp_frame[key] = intrinsics[key]
+            temp_frame["transforms_matrix"] = extrinsics[0]["transform_matrix"]
+            temp_frame["file_path"] = cam.name+".png"
+            all_camera_data["frames"].append(temp_frame)
 
-        # 定义保存的路径，你可以自定义
-        output_directory = r"D:\blenderdata\dominuo"  # 更改为您的输出目录
+        output_directory = r"D:\moqiyinlun\desk\1"  
         self.save_json(output_directory, "transforms.json", all_camera_data)
 
-# 最后，调用上述函数执行导出操作:
-
-# 获取当前的Blender上下文
 context = bpy.context
 
 operator = BlenderNeRF_Operator()
