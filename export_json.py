@@ -1,9 +1,117 @@
-import os
-import math
+import mathutils
 import json
 import datetime
 import bpy
+import os
+import xml.etree.ElementTree as ET
+import numpy as np
+from typing import Literal, Tuple , List
+def get_scene_mesh_aabb():
+    all_world_corners = []
 
+    for obj in bpy.context.scene.objects:
+        if obj.type != 'MESH':
+            continue
+        local_corners = [mathutils.Vector(corner) for corner in obj.bound_box]
+        world_corners = [obj.matrix_world @ corner for corner in local_corners]
+        all_world_corners.extend(world_corners)
+
+    if not all_world_corners:
+        return None
+
+    coords = np.array([[v.x, v.y, v.z] for v in all_world_corners])
+    min_xyz = np.min(coords, axis=0)
+    max_xyz = np.max(coords, axis=0)
+    return min_xyz.tolist(), max_xyz.tolist()
+def normalize(v):
+    norm = np.linalg.norm(v)
+    if norm == 0:
+        return v
+    return v / norm
+
+def rotation_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    a = a / np.linalg.norm(a)
+    b = b / np.linalg.norm(b)
+    v = np.cross(a, b)
+    c = np.dot(a, b)
+    if c < -1 + 1e-8:
+        eps = (np.random.rand(3) - 0.5) * 0.01
+        return rotation_matrix(a + eps, b)
+    s = np.linalg.norm(v)
+    skew_sym_mat = np.array(
+        [
+            [0, -v[2], v[1]],
+            [v[2], 0, -v[0]],
+            [-v[1], v[0], 0],
+        ]
+    )
+    return np.eye(3) + skew_sym_mat + skew_sym_mat @ skew_sym_mat * ((1 - c) / (s**2 + 1e-8))
+
+def distance(x, os, ds):
+    total_distance = 0
+    for o, d in zip(os, ds):
+        a = o
+        b = o + d
+        ab = b - a
+        ap = x - a
+        total_distance += np.linalg.norm(ap - np.dot(ap, ab/np.dot(ab, ab))*ab)
+    return total_distance
+
+def auto_orient_and_center_poses(
+    poses: np.ndarray,
+    method: Literal["pca", "up", "vertical", "none"] = "up",
+    center_method: Literal["poses", "focus", "none"] = "poses",
+):
+    origins = poses[..., :3, 3]
+    mean_origin = np.mean(origins, axis=0)
+    translation_diff = origins - mean_origin
+
+    if center_method == "poses":
+        translation = mean_origin
+    elif center_method == "none":
+        translation = np.zeros_like(mean_origin)
+    else:
+        raise ValueError(f"Unknown value for center_method: {center_method}")
+
+    if method == "pca":
+        _, eigvec = np.linalg.eigh(translation_diff.T @ translation_diff)
+        eigvec = np.flip(eigvec, axis=-1)
+
+        if np.linalg.det(eigvec) < 0:
+            eigvec[:, 2] = -eigvec[:, 2]
+
+        transform = np.concatenate([eigvec, eigvec @ -translation[..., None]], axis=-1)
+        oriented_poses = transform @ poses
+
+        if np.mean(oriented_poses, axis=0)[2, 1] < 0:
+            oriented_poses[:, 1:3] = -1 * oriented_poses[:, 1:3]
+
+    elif method in ("up", "vertical"):
+        up = np.mean(poses[:, :3, 1], axis=0)
+        up = up / np.linalg.norm(up)
+        if method == "vertical":
+            x_axis_matrix = poses[:, :3, 0]
+            _, S, Vh = np.linalg.svd(x_axis_matrix, full_matrices=False)
+            if S[1] > 0.17 * math.sqrt(poses.shape[0]):
+                up_vertical = Vh[2, :]
+                up = up_vertical if np.dot(up_vertical, up) > 0 else -up_vertical
+            else:
+                up = up - Vh[0, :] * np.dot(up, Vh[0, :])
+                up = up / np.linalg.norm(up)
+
+        rotation = rotation_matrix(up, np.array([0, 0, 1]))
+        transform = np.concatenate([rotation, rotation @ -translation[..., None]], axis=-1)
+        oriented_poses = transform @ poses
+
+    elif method == "none":
+        transform = np.eye(4)
+        transform[:3, 3] = -translation
+        transform = transform[:3, :]
+        oriented_poses = transform @ poses
+    else:
+        raise ValueError(f"Unknown value for method: {method}")
+
+    return oriented_poses, transform
 
 # global addon script variables
 OUTPUT_TRAIN = 'train'
@@ -206,21 +314,34 @@ class BlenderNeRF_Operator():
         self.save_json(directory, filename='log.txt', data=logdata)
     def export_all_cameras(self, context):
         scene = context.scene
-        cameras_in_scene = [obj for obj in scene.objects if obj.type == 'CAMERA'] # 获取场景中的所有相机
+        cameras_in_scene = [obj for obj in scene.objects if obj.type == 'CAMERA'] 
 
         all_camera_data = {}
         all_camera_data["frames"] = []
+        pose_data = []
+        for cam in cameras_in_scene:
+            extrinsics = self.get_camera_extrinsics(scene, cam)
+            pose_data.append(np.array(extrinsics[0]["transform_matrix"]))
+        # pose_data = torch.from_numpy(np.array(pose_data).astype(np.float32))
+        pose_data = np.array(pose_data)
+#        pose_data, transform_matrix = auto_orient_and_center_poses(
+#            pose_data,
+#            method="up",
+#            center_method="poses"
+#        )
+        cnt = 0 
         for cam in cameras_in_scene:
             temp_frame = {}
             intrinsics = self.get_camera_intrinsics(scene, cam)
             extrinsics = self.get_camera_extrinsics(scene, cam) 
             for key in intrinsics.keys():
                 temp_frame[key] = intrinsics[key]
-            temp_frame["transforms_matrix"] = extrinsics[0]["transform_matrix"]
+            temp_frame["transform_matrix"] = np.vstack((pose_data[cnt], np.array([0, 0, 0, 1]))).tolist()#extrinsics[0]["transform_matrix"]
             temp_frame["file_path"] = cam.name+".png"
             all_camera_data["frames"].append(temp_frame)
-
-        output_directory = r"D:\moqiyinlun\desk\1"  
+            cnt+=1
+        all_camera_data["aabb"] = get_scene_mesh_aabb()
+        output_directory = r"C:\moqiyinlun\3DPrinter\House2"  
         self.save_json(output_directory, "transforms.json", all_camera_data)
 
 context = bpy.context
