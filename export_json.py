@@ -336,12 +336,21 @@ class BlenderNeRF_Operator():
             extrinsics = self.get_camera_extrinsics(scene, cam) 
             for key in intrinsics.keys():
                 temp_frame[key] = intrinsics[key]
-            temp_frame["transform_matrix"] = np.vstack((pose_data[cnt], np.array([0, 0, 0, 1]))).tolist()#extrinsics[0]["transform_matrix"]
+            temp_frame["transform_matrix"] = extrinsics[0]["transform_matrix"]
             temp_frame["file_path"] = cam.name+".png"
             all_camera_data["frames"].append(temp_frame)
             cnt+=1
-        all_camera_data["aabb"] = get_scene_mesh_aabb()
-        output_directory = r"C:\moqiyinlun\3DPrinter\House2"  
+        aabb = get_scene_mesh_aabb()
+        print(aabb)
+        aabb = np.array(aabb)
+        center = (aabb[0] + aabb[1]) / 2
+        half_size = (aabb[1] - aabb[0]) / 2
+
+        # Scale
+        scaled_half_size = half_size * 1.5
+        scaled_aabb = [(center - scaled_half_size).tolist(), (center + scaled_half_size).tolist()]
+        all_camera_data["aabb"] = scaled_aabb #[[aabb[0][1],aabb[0][2],aabb[0][0]],[aabb[1][1],aabb[1][2],aabb[1][0]]]
+        output_directory = r"C:\moqiyinlun\3DPrinter\Hair"  
         self.save_json(output_directory, "transforms.json", all_camera_data)
 
 context = bpy.context
